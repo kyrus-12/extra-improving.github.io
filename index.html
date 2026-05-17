@@ -2168,7 +2168,46 @@ function onYouTubeIframeAPIReady() {
     });
 }
 
+function toggleDiscussionMusic() {
+    const btn = document.getElementById('musicToggle');
+    const icon = document.getElementById('musicIcon');
+    if (!youtubePlayer) return;
 
+    if (musicPlaying) {
+        // RULE: Music playing = press toggle = stop music
+        youtubePlayer.pauseVideo();
+        btn.classList.remove('playing');
+        icon.className = 'fas fa-play';
+        musicPlaying = false;
+        wasMusicPlayingBeforeVideo = false; 
+    } else {
+        // RULE: Music starts playing = force all embedded videos to STOP
+        document.querySelectorAll('iframe[src*="youtube.com/embed"]').forEach(iframe => {
+            try {
+                iframe.contentWindow.postMessage(JSON.stringify({
+                    event: 'command',
+                    func: 'pauseVideo',
+                    args: []
+                }), '*');
+            } catch(e) {}
+        });
+        
+        // Pause any native browser videos if present
+        document.querySelectorAll('video, audio').forEach(media => {
+            try { media.pause(); } catch(e) {}
+        });
+
+        activeVideoPlayers.clear(); 
+
+        // Now safe to play background music
+        youtubePlayer.playVideo();
+        btn.classList.add('playing');
+        icon.className = 'fas fa-pause';
+        musicPlaying = true;
+        wasMusicPlayingBeforeVideo = true; 
+    }
+}
+        
         
 
         function updateMusicVisibility() {
@@ -2658,32 +2697,33 @@ function loadYouTubeAPI() {
 
 // ===================== YOUTUBE POSTMESSAGE SETUP =====================
 function initYouTubeMessageListeners() {
-    // Listen for state changes from YouTube iframes
     window.addEventListener('message', (event) => {
         if (!event.data) return;
-        
-        // Check if this is from a YouTube iframe
+
         const iframe = Array.from(document.querySelectorAll('iframe[src*="youtube.com/embed"]'))
             .find(f => f.contentWindow === event.source);
         if (!iframe) return;
-        
+
         let data = event.data;
         if (typeof data === 'string') {
             try { data = JSON.parse(data); } catch(e) { return; }
         }
-        
-        // Handle state change messages from YouTube
+
+        // Catch internal state change notifications from YouTube
         if (data.event === 'onStateChange' && data.info && typeof data.info.playerState === 'number') {
             const state = data.info.playerState;
-            const iframeId = iframe.id || iframe.src || 'yt-' + Math.random().toString(36).substr(2, 5);
-            
-            if (state === 1) { // PLAYING
+            const iframeId = iframe.id || iframe.src;
+
+            if (state === 1) { 
+                // RULE: Video plays = stop background music
                 onYouTubePlay(iframeId);
-            } else if (state === 2 || state === 0) { // PAUSED or ENDED
+            } else if (state === 2 || state === 0) { 
+                // Video paused or finished = resume background music if it was running before
                 onYouTubePause(iframeId);
             }
         }
     });
+}
     
     // Subscribe to events from all YouTube iframes
     function subscribeToYouTubeEvents() {
@@ -2785,6 +2825,30 @@ function attachMediaListeners(element) {
 }
 
 
+        // Add this new function to tell the embedded videos to start sending play/pause events
+function registerEmbeddedVideosForAPI() {
+    document.querySelectorAll('iframe[src*="youtube.com/embed"]').forEach(iframe => {
+        // Send the initial registration listening command required by YouTube API
+        iframe.addEventListener('load', () => {
+            try {
+                iframe.contentWindow.postMessage(JSON.stringify({
+                    event: 'listening',
+                    id: iframe.id || iframe.src
+                }), '*');
+            } catch(e) {}
+        });
+        
+        // Force the message if already loaded
+        try {
+            iframe.contentWindow.postMessage(JSON.stringify({
+                event: 'listening',
+                id: iframe.id || iframe.src
+            }), '*');
+        } catch(e) {}
+    });
+}
+        
+
 
 function onNativeMediaPause(mediaElement) {
     const mediaId = mediaElement.id || mediaElement.src || 'native-' + Math.random().toString(36).substr(2, 9);
@@ -2814,6 +2878,7 @@ function onNativeMediaPause(mediaElement) {
             
            // Initialize video monitoring
     initVideoMonitoring();
+            registerEmbeddedVideosForAPI();
     
     // Announce this tab is active
     if (document.visibilityState === 'visible') {
